@@ -2,8 +2,6 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-import { fail } from "../utils/fail";
-import { getEngineersFromS3 } from "../utils/getEngineersFromS3";
 import { getSlackMessageId } from "../utils/getSlackMessageId";
 import { slackWebClient } from "../utils/slackWebClient";
 
@@ -12,7 +10,6 @@ import { handlePullRequestReview } from "./handlePullRequestReview";
 vi.mock("@actions/core");
 vi.mock("@actions/github");
 vi.mock("../utils/fail");
-vi.mock("../utils/getEngineersFromS3");
 vi.mock("../utils/getSlackMessageId");
 vi.mock("../utils/logger");
 vi.mock("../utils/slackWebClient", () => ({
@@ -24,21 +21,12 @@ vi.mock("../utils/slackWebClient", () => ({
 
 const mockCore = vi.mocked(core);
 const mockGithub = vi.mocked(github);
-const mockFail = vi.mocked(fail);
-const mockGetEngineersFromS3 = vi.mocked(getEngineersFromS3);
 const mockGetSlackMessageId = vi.mocked(getSlackMessageId);
 const mockPostMessage = vi.mocked(slackWebClient.chat.postMessage);
 const mockReactionsGet = vi.mocked(slackWebClient.reactions.get);
 const mockReactionsAdd = vi.mocked(slackWebClient.reactions.add);
 
 const mockListCommentsForReview = vi.fn();
-
-const slackUsers = {
-  engineers: [
-    { github_username: "reviewer1", slack_id: "UREV1" },
-    { github_username: "author1", slack_id: "UAUTH1" },
-  ],
-};
 
 const basePayload = {
   action: "submitted",
@@ -67,26 +55,36 @@ describe("handlePullRequestReview", () => {
     mockGithub.getOctokit.mockReturnValue({
       rest: { pulls: { listCommentsForReview: mockListCommentsForReview } },
     } as any);
-    mockGetEngineersFromS3.mockResolvedValue(slackUsers as any);
     mockGetSlackMessageId.mockResolvedValue("1234567890.123456");
     mockPostMessage.mockResolvedValue({ ok: true } as any);
     mockReactionsGet.mockResolvedValue({ message: { reactions: [] } } as any);
     mockReactionsAdd.mockResolvedValue({ ok: true } as any);
   });
 
-  it("posts approval message and adds white_check_mark reaction", async () => {
+  it("posts approval message with reviewer's github login and adds white_check_mark reaction", async () => {
     mockGithub.context.payload.review.state = "approved";
     mockGithub.context.payload.review.body = "";
 
     await handlePullRequestReview();
 
     const callArgs = mockPostMessage.mock.calls[0][0] as any;
+    expect(callArgs.text).toContain("*reviewer1*");
     expect(callArgs.text).toContain("approved your PR");
     expect(callArgs.channel).toBe("test-channel");
     expect(callArgs.thread_ts).toBe("1234567890.123456");
     expect(mockReactionsAdd).toHaveBeenCalledWith(
       expect.objectContaining({ name: "white_check_mark" }),
     );
+  });
+
+  it("does not include Slack user mentions (teams-only v1)", async () => {
+    mockGithub.context.payload.review.state = "approved";
+
+    await handlePullRequestReview();
+
+    const callArgs = mockPostMessage.mock.calls[0][0] as any;
+    // Should NOT contain any <@U...> individual mention syntax
+    expect(callArgs.text).not.toMatch(/<@U[A-Z0-9]+>/);
   });
 
   it("posts changes_requested message with review body and octagonal_sign reaction", async () => {
@@ -96,6 +94,7 @@ describe("handlePullRequestReview", () => {
     await handlePullRequestReview();
 
     const callArgs = mockPostMessage.mock.calls[0][0] as any;
+    expect(callArgs.text).toContain("*reviewer1*");
     expect(callArgs.text).toContain("would like you to change some things");
     expect(callArgs.text).toContain("Please fix the tests");
     expect(mockReactionsAdd).toHaveBeenCalledWith(
@@ -118,6 +117,7 @@ describe("handlePullRequestReview", () => {
     await handlePullRequestReview();
 
     const callArgs = mockPostMessage.mock.calls[0][0] as any;
+    expect(callArgs.text).toContain("*reviewer1*");
     expect(callArgs.text).toContain("Overall looks good");
     expect(callArgs.text).toContain("Nit: rename this var");
     expect(mockReactionsAdd).toHaveBeenCalledWith(
@@ -190,27 +190,6 @@ describe("handlePullRequestReview", () => {
     expect(mockCore.warning).toHaveBeenCalledWith(
       expect.stringContaining("no Slack message ID"),
     );
-  });
-
-  it("throws when reviewer not found in S3 mapping", async () => {
-    mockGithub.context.payload.review.user.login = "unknown-reviewer";
-
-    await expect(handlePullRequestReview()).rejects.toThrow(
-      "Could not map unknown-reviewer to the users you provided in action.yml",
-    );
-    expect(mockFail).toHaveBeenCalled();
-  });
-
-  it("throws when author not found in S3 mapping", async () => {
-    mockGetEngineersFromS3.mockResolvedValue({
-      engineers: [{ github_username: "reviewer1", slack_id: "UREV1" }],
-    } as any);
-    mockGithub.context.payload.pull_request.user.login = "unknown-author";
-
-    await expect(handlePullRequestReview()).rejects.toThrow(
-      "Could not map unknown-author to the users you provided in action.yml",
-    );
-    expect(mockFail).toHaveBeenCalled();
   });
 
   it("skips adding reaction if already present", async () => {

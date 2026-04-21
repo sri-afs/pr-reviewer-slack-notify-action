@@ -5,14 +5,21 @@ branding:
   icon: at-sign
 inputs:
   aws-region:
-    description: 'Region in which the Github <=> Slack engineer mapping JSON is stored'
-    required: true
+    description: 'Region in which the GitHub-team -> Slack-user-group mapping JSON is stored. Required unless team-mapping-json is provided.'
+    required: false
+    default: ""
   aws-s3-bucket:
-    description: 'Bucket in which the Github <=> Slack engineer mapping JSON object is stored in S3'
-    required: true
+    description: 'S3 bucket holding the GitHub-team -> Slack-user-group mapping JSON object. Required unless team-mapping-json is provided.'
+    required: false
+    default: ""
   aws-s3-object-key:
-    description: 'Name of the Github <=> Slack engineer mapping JSON object in S3'
-    required: true
+    description: 'Name of the GitHub-team -> Slack-user-group mapping JSON object in S3. Required unless team-mapping-json is provided.'
+    required: false
+    default: ""
+  team-mapping-json:
+    description: 'Optional inline JSON string of the team mapping. Overrides the S3 fetch when provided. Shape: {"teams":[{"github_team_slug":"...","slack_user_group_id":"S..."}]}. Useful for local testing or when S3 is not yet set up.'
+    required: false
+    default: ""
   base-branch:
     description: "Branch that you will be opening PRs in to (e.g. 'staging', 'master')."
     required: true

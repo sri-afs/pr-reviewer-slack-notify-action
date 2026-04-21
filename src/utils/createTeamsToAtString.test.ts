@@ -1,59 +1,71 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-import { createUsersToAtString } from "./createUsersToAtString";
+import { createTeamsToAtString } from "./createTeamsToAtString";
 import { fail } from "./fail";
-import { getEngineersFromS3 } from "./getEngineersFromS3";
+import { getTeamMappingFromS3 } from "./getEngineersFromS3";
 
 vi.mock("./fail");
 vi.mock("./getEngineersFromS3");
 vi.mock("./logger");
 
 const mockFail = vi.mocked(fail);
-const mockGetEngineersFromS3 = vi.mocked(getEngineersFromS3);
+const mockGetTeamMappingFromS3 = vi.mocked(getTeamMappingFromS3);
 
-const mockEngineers = [
-  { github_username: "alice", slack_id: "U111111" },
-  { github_username: "bob", slack_id: "U222222" },
-  { github_username: "charlie", slack_id: "U333333" },
+const mockTeams = [
+  { github_team_slug: "backend", slack_user_group_id: "S07F6TF8N86" },
+  { github_team_slug: "frontend", slack_user_group_id: "S07FG1G7ELC" },
+  { github_team_slug: "automation", slack_user_group_id: "S07G2AJCERE" },
 ];
 
-describe("createUsersToAtString", () => {
+describe("createTeamsToAtString", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetEngineersFromS3.mockResolvedValue({
-      engineers: mockEngineers,
+    mockGetTeamMappingFromS3.mockResolvedValue({
+      teams: mockTeams,
     } as any);
   });
 
-  it("should map a single GitHub user to a Slack mention", async () => {
-    const result = await createUsersToAtString(["alice"]);
+  it("maps a single team slug to a Slack user group mention", async () => {
+    const result = await createTeamsToAtString(["backend"]);
 
-    expect(result).toBe("<@U111111>");
+    expect(result).toBe("<!subteam^S07F6TF8N86>");
   });
 
-  it("should map multiple GitHub users to comma-separated Slack mentions", async () => {
-    const result = await createUsersToAtString(["alice", "bob", "charlie"]);
+  it("maps multiple team slugs to space-separated user group mentions", async () => {
+    const result = await createTeamsToAtString([
+      "backend",
+      "frontend",
+      "automation",
+    ]);
 
-    expect(result).toBe("<@U111111>, <@U222222>, <@U333333>");
+    expect(result).toBe(
+      "<!subteam^S07F6TF8N86> <!subteam^S07FG1G7ELC> <!subteam^S07G2AJCERE>",
+    );
   });
 
-  it("should return empty string when no reviewers match", async () => {
-    const result = await createUsersToAtString(["unknown-user"]);
+  it("silently skips team slugs that have no mapping", async () => {
+    const result = await createTeamsToAtString(["backend", "not-mapped"]);
+
+    expect(result).toBe("<!subteam^S07F6TF8N86>");
+  });
+
+  it("returns empty string when no team slugs match", async () => {
+    const result = await createTeamsToAtString(["some-other-team"]);
 
     expect(result).toBe("");
   });
 
-  it("should return empty string when reviewers array is empty", async () => {
-    const result = await createUsersToAtString([]);
+  it("returns empty string when teamSlugs array is empty", async () => {
+    const result = await createTeamsToAtString([]);
 
     expect(result).toBe("");
   });
 
-  it("should call fail when getEngineersFromS3 throws", async () => {
+  it("calls fail when getTeamMappingFromS3 throws", async () => {
     const error = new Error("S3 fetch failed");
-    mockGetEngineersFromS3.mockRejectedValue(error);
+    mockGetTeamMappingFromS3.mockRejectedValue(error);
 
-    const result = await createUsersToAtString(["alice"]);
+    const result = await createTeamsToAtString(["backend"]);
 
     expect(mockFail).toHaveBeenCalledWith(error);
     expect(result).toBe("");

@@ -2,17 +2,17 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-import { createUsersToAtString } from "../utils/createUsersToAtString";
+import { createTeamsToAtString } from "../utils/createTeamsToAtString";
 import { fail } from "../utils/fail";
 import { getPullRequest } from "../utils/getPullRequest";
-import { getRequestedReviewersAsIndividuals } from "../utils/getRequestedReviewersAsIndividuals";
+import { getRequestedTeams } from "../utils/getRequestedTeams";
 import { slackWebClient } from "../utils/slackWebClient";
 
 import { createInitialMessage } from "./createInitialMessage";
 
 vi.mock("@actions/core");
 vi.mock("@actions/github");
-vi.mock("../utils/createUsersToAtString");
+vi.mock("../utils/createTeamsToAtString");
 vi.mock("../utils/fail");
 vi.mock("../utils/getPullRequest");
 vi.mock("../utils/logger");
@@ -21,16 +21,14 @@ vi.mock("../utils/slackWebClient", () => ({
     chat: { postMessage: vi.fn(), getPermalink: vi.fn() },
   },
 }));
-vi.mock("../utils/getRequestedReviewersAsIndividuals");
+vi.mock("../utils/getRequestedTeams");
 
 const mockCore = vi.mocked(core);
 const mockGithub = vi.mocked(github);
-const mockCreateUsersToAtString = vi.mocked(createUsersToAtString);
+const mockCreateTeamsToAtString = vi.mocked(createTeamsToAtString);
 const mockFail = vi.mocked(fail);
 const mockGetPullRequest = vi.mocked(getPullRequest);
-const mockGetRequestedReviewersAsIndividuals = vi.mocked(
-  getRequestedReviewersAsIndividuals,
-);
+const mockGetRequestedTeams = vi.mocked(getRequestedTeams);
 const mockPostMessage = vi.mocked(slackWebClient.chat.postMessage);
 const mockGetPermalink = vi.mocked(slackWebClient.chat.getPermalink);
 
@@ -73,11 +71,10 @@ describe("createInitialMessage", () => {
     } as any);
 
     mockGetPullRequest.mockResolvedValue(basePullRequest as any);
-    mockGetRequestedReviewersAsIndividuals.mockResolvedValue([
-      "reviewer1",
-      "reviewer2",
-    ]);
-    mockCreateUsersToAtString.mockResolvedValue("<@U111> <@U222>");
+    mockGetRequestedTeams.mockResolvedValue(["backend", "frontend"]);
+    mockCreateTeamsToAtString.mockResolvedValue(
+      "<!subteam^S111> <!subteam^S222>",
+    );
     mockPostMessage.mockResolvedValue({
       ok: true,
       ts: "1234567890.123456",
@@ -154,8 +151,8 @@ describe("createInitialMessage", () => {
     expect(mockPostMessage).not.toHaveBeenCalled();
   });
 
-  it("returns early when no requested reviewers", async () => {
-    mockGetRequestedReviewersAsIndividuals.mockResolvedValue([]);
+  it("returns early when no requested teams", async () => {
+    mockGetRequestedTeams.mockResolvedValue([]);
 
     const result = await createInitialMessage();
 

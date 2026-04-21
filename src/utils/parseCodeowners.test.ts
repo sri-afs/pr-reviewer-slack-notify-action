@@ -28,19 +28,20 @@ describe("parseCodeowners", () => {
     mockGithub.getOctokit.mockReturnValue(mockOctokit as any);
   });
 
-  it("parses individual users from CODEOWNERS", async () => {
+  it("skips individual users from CODEOWNERS (v1 is teams-only)", async () => {
     mockGetContent.mockResolvedValueOnce({
       data: { content: encodeContent("* @alice @bob\n") },
     });
 
     const result = await parseCodeowners(repository, branch);
 
-    expect(result.success).toBe(true);
-    expect(result.users).toEqual(["alice", "bob"]);
+    // No teams and no (non-skipped) users means parse returns success: false
+    expect(result.success).toBe(false);
+    expect(result.users).toEqual([]);
     expect(result.teams).toEqual([]);
   });
 
-  it("parses team owners (org/team format)", async () => {
+  it("parses team owners and skips individuals on the same line", async () => {
     mockGetContent.mockResolvedValueOnce({
       data: {
         content: encodeContent(
@@ -52,18 +53,18 @@ describe("parseCodeowners", () => {
     const result = await parseCodeowners(repository, branch);
 
     expect(result.success).toBe(true);
-    expect(result.users).toEqual(["alice"]);
+    expect(result.users).toEqual([]);
     expect(result.teams).toEqual(["myorg/frontend-team", "myorg/backend-team"]);
   });
 
-  it("skips comment lines and empty lines", async () => {
+  it("skips comment lines, empty lines, and individual owners", async () => {
     const content = [
       "# This is a comment",
       "",
       "  # Another comment",
       "* @alice",
       "",
-      "src/ @bob",
+      "src/ @bob @myorg/backend-team",
     ].join("\n");
 
     mockGetContent.mockResolvedValueOnce({
@@ -73,7 +74,8 @@ describe("parseCodeowners", () => {
     const result = await parseCodeowners(repository, branch);
 
     expect(result.success).toBe(true);
-    expect(result.users).toEqual(["alice", "bob"]);
+    expect(result.users).toEqual([]);
+    expect(result.teams).toEqual(["myorg/backend-team"]);
   });
 
   it("tries all three possible paths (.github/CODEOWNERS, CODEOWNERS, docs/CODEOWNERS)", async () => {
@@ -82,13 +84,13 @@ describe("parseCodeowners", () => {
       .mockRejectedValueOnce({ status: 404 })
       .mockRejectedValueOnce({ status: 404 })
       .mockResolvedValueOnce({
-        data: { content: encodeContent("* @charlie\n") },
+        data: { content: encodeContent("* @myorg/charlie-team\n") },
       });
 
     const result = await parseCodeowners(repository, branch);
 
     expect(result.success).toBe(true);
-    expect(result.users).toEqual(["charlie"]);
+    expect(result.teams).toEqual(["myorg/charlie-team"]);
     expect(mockGetContent).toHaveBeenCalledTimes(3);
     expect(mockGetContent).toHaveBeenCalledWith(
       expect.objectContaining({ path: ".github/CODEOWNERS" }),
@@ -126,7 +128,7 @@ describe("parseCodeowners", () => {
     expect(result).toEqual({ users: [], teams: [], success: false });
   });
 
-  it("deduplicates users and teams", async () => {
+  it("deduplicates teams and skips duplicate individuals", async () => {
     const content = [
       "* @alice @bob @myorg/team-a",
       "src/ @alice @bob @myorg/team-a",
@@ -140,7 +142,7 @@ describe("parseCodeowners", () => {
     const result = await parseCodeowners(repository, branch);
 
     expect(result.success).toBe(true);
-    expect(result.users).toEqual(["alice", "bob"]);
+    expect(result.users).toEqual([]);
     expect(result.teams).toEqual(["myorg/team-a"]);
   });
 

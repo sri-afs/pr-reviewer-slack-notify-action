@@ -1,38 +1,37 @@
 import { fail } from "./fail";
-import { getEngineersFromS3 } from "./getEngineersFromS3";
-import { EngineerGithubSlackMapping } from "./getEngineersFromS3/types";
+import { getTeamMappingFromS3 } from "./getEngineersFromS3";
+import { TeamGithubSlackMapping } from "./getEngineersFromS3/types";
 import { logger } from "./logger";
 
-// reviewers is string[], where the strings should be github user names
-export const createUsersToAtString = async (
-  reviewers: string[],
+/**
+ * Builds a Slack-mentions string from a list of GitHub team slugs.
+ * Each mapped team becomes a <!subteam^ID> (Slack user group mention).
+ * Teams without a mapping are silently skipped.
+ */
+export const createTeamsToAtString = async (
+  teamSlugs: string[],
 ): Promise<string> => {
-  logger.info(`Mapping ${reviewers.length} GitHub users to Slack mentions`);
-  let engineers: EngineerGithubSlackMapping[] = [];
+  logger.info(
+    `Mapping ${teamSlugs.length} GitHub team(s) to Slack user group mentions`,
+  );
+  let teams: TeamGithubSlackMapping[] = [];
   try {
-    const res = await getEngineersFromS3();
-    engineers = res.engineers;
+    const res = await getTeamMappingFromS3();
+    teams = res.teams;
   } catch (error) {
     fail(error);
   }
 
-  const usersToAt = engineers.filter((user) =>
-    reviewers.includes(user.github_username),
+  const teamsToAt = teams.filter((team) =>
+    teamSlugs.includes(team.github_team_slug),
   );
 
-  let usersToAtString: string = "";
-
-  usersToAt.forEach((user) => {
-    if (!usersToAtString) {
-      usersToAtString = `<@${user.slack_id}>`;
-      return;
-    }
-    usersToAtString = `${usersToAtString}, <@${user.slack_id}>`;
-    return;
-  });
+  const mentions = teamsToAt.map(
+    (team) => `<!subteam^${team.slack_user_group_id}>`,
+  );
 
   logger.info(
-    `Mapped ${usersToAt.length}/${reviewers.length} reviewers to Slack mentions`,
+    `Mapped ${teamsToAt.length}/${teamSlugs.length} teams to Slack mentions`,
   );
-  return usersToAtString;
+  return mentions.join(" ");
 };

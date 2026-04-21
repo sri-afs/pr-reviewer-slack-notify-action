@@ -2,7 +2,6 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 
 import { fail } from "../utils/fail";
-import { getEngineersFromS3 } from "../utils/getEngineersFromS3";
 import { getSlackMessageId } from "../utils/getSlackMessageId";
 import { logger } from "../utils/logger";
 import { slackWebClient } from "../utils/slackWebClient";
@@ -17,7 +16,6 @@ export const handlePullRequestReview = async (): Promise<void> => {
   logger.info("Handling pull request review event");
   try {
     const channelId = core.getInput("channel-id");
-    const slackUsers = await getEngineersFromS3();
     const { action, pull_request, review } = github.context.payload;
 
     if (action !== "submitted") {
@@ -44,39 +42,12 @@ export const handlePullRequestReview = async (): Promise<void> => {
     }
 
     //
-    // ─── MAP USERS ───────────────────────────────────────────────────
-    //
-
-    const [reviewer] = slackUsers.engineers.filter((user) => {
-      return user.github_username === review.user.login;
-    });
-    const [author] = slackUsers.engineers.filter((user) => {
-      return user.github_username === pull_request.user.login;
-    });
-
-    if (!reviewer) {
-      core.error(
-        `Could not map reviewer '${review.user.login}' to a Slack user from the S3 mapping`,
-      );
-      throw Error(
-        `Could not map ${review.user.login} to the users you provided in action.yml`,
-      );
-    }
-
-    if (!author) {
-      core.error(
-        `Could not map PR author '${pull_request.user.login}' to a Slack user from the S3 mapping`,
-      );
-      throw Error(
-        `Could not map ${pull_request.user.login} to the users you provided in action.yml`,
-      );
-    }
-
-    //
     // ─── BUILD MESSAGE ───────────────────────────────────────────────
+    // v1: teams-only — we don't have an individuals mapping, so we use
+    // plain-text usernames rather than @-pings in the thread reply.
     //
 
-    const userText = `<@${author.slack_id}>, *${reviewer.github_username}*`;
+    const reviewerLogin = review.user.login;
     let actionText: string = "";
     let reactionToAdd: string = "";
     switch (review.state) {
@@ -128,7 +99,7 @@ export const handlePullRequestReview = async (): Promise<void> => {
         }
         break;
     }
-    const text = `${userText} ${actionText}`;
+    const text = `*${reviewerLogin}* ${actionText}`;
     // post corresponding message
     await slackWebClient.chat.postMessage({
       channel: channelId,

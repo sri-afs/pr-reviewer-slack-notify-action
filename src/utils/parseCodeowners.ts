@@ -77,9 +77,11 @@ export const parseCodeowners = async (
           teams.add(cleanOwner);
           logger.info(`Found team: ${cleanOwner}`);
         } else {
-          // This is a user
-          users.add(cleanOwner);
-          logger.info(`Found user: ${cleanOwner}`);
+          // Individual owner — skipped in v1 (teams-only).
+          // Individuals should be covered via team membership instead.
+          logger.info(
+            `Skipping individual owner '${cleanOwner}' (v1 is teams-only; add them to a team instead)`,
+          );
         }
       }
     }

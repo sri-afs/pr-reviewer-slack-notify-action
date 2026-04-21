@@ -4,18 +4,38 @@ import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { fail } from "../fail";
 import { logger } from "../logger";
 
-import { EngineerGithubSlackMapping } from "./types";
+import { TeamGithubSlackMapping } from "./types";
 
-export const getEngineersFromS3 = async (): Promise<{
-  engineers: EngineerGithubSlackMapping[];
+export const getTeamMappingFromS3 = async (): Promise<{
+  teams: TeamGithubSlackMapping[];
 }> => {
-  logger.info("START getEngineersFromS3");
+  logger.info("START getTeamMappingFromS3");
+
+  // Escape hatch: when `team-mapping-json` is provided inline, skip the S3
+  // fetch entirely. Useful for local testing or before the S3 bucket is set up.
+  const inlineMapping = core.getInput("team-mapping-json");
+  if (inlineMapping) {
+    logger.info(
+      "Using inline team-mapping-json input (skipping S3 fetch)",
+    );
+    try {
+      return JSON.parse(inlineMapping);
+    } catch (error) {
+      fail(error);
+      throw new Error(
+        "Invalid JSON in team-mapping-json input — could not parse",
+      );
+    }
+  }
+
   const Bucket = core.getInput("aws-s3-bucket");
   const Key = core.getInput("aws-s3-object-key");
   const region = core.getInput("aws-region");
 
   if (!Bucket || !Key || !region) {
-    throw new Error("Missing required inputs for AWS");
+    throw new Error(
+      "Missing required inputs: either provide team-mapping-json, or all of aws-region, aws-s3-bucket, and aws-s3-object-key",
+    );
   }
 
   const client = new S3Client({ region });
