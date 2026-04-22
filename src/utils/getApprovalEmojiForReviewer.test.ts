@@ -4,13 +4,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { getTeamMappingFromS3 } from "./getEngineersFromS3";
 import { getApprovalEmojiForReviewer } from "./getApprovalEmojiForReviewer";
-import { getRequestedTeams } from "./getRequestedTeams";
 import { logger } from "./logger";
 
 vi.mock("@actions/core");
 vi.mock("@actions/github");
 vi.mock("./getEngineersFromS3");
-vi.mock("./getRequestedTeams");
 vi.mock("./logger");
 
 const mockGetMembership = vi.fn();
@@ -25,7 +23,6 @@ const mockOctokit = {
 const mockCore = vi.mocked(core);
 const mockGithub = vi.mocked(github);
 const mockGetTeamMappingFromS3 = vi.mocked(getTeamMappingFromS3);
-const mockGetRequestedTeams = vi.mocked(getRequestedTeams);
 const mockLogger = vi.mocked(logger);
 
 const mappingWithEmojis = {
@@ -44,6 +41,11 @@ const mappingWithEmojis = {
       github_team_slug: "pdf-reporting",
       slack_user_group_id: "S3",
       // no approval_emoji
+    },
+    {
+      github_team_slug: "infra",
+      slack_user_group_id: "S4",
+      approval_emoji: "inf",
     },
   ],
 };
@@ -66,14 +68,14 @@ describe("getApprovalEmojiForReviewer", () => {
 
   it("returns the team's approval_emoji when reviewer is a member of a mapped team", async () => {
     mockGetTeamMappingFromS3.mockResolvedValue(mappingWithEmojis as any);
-    mockGetRequestedTeams.mockResolvedValue(["backend", "frontend"]);
+    // Reviewer is in backend
     mockGetMembership.mockResolvedValue({
       data: { state: "active" },
     });
 
     const result = await getApprovalEmojiForReviewer("alice");
 
-    expect(result).toBe("be"); // first match — backend
+    expect(result).toBe("be"); // first mapped team with emoji + membership
     expect(mockGetMembership).toHaveBeenCalledWith({
       org: "ApprenticeFS",
       team_slug: "backend",
@@ -81,39 +83,68 @@ describe("getApprovalEmojiForReviewer", () => {
     });
   });
 
-  it("iterates through requested teams and picks the first the reviewer belongs to", async () => {
+  it("iterates through all mapped teams and picks the first the reviewer belongs to", async () => {
     mockGetTeamMappingFromS3.mockResolvedValue(mappingWithEmojis as any);
-    mockGetRequestedTeams.mockResolvedValue(["backend", "frontend"]);
-    // Not in backend (404), but in frontend
+    // Not in backend (404), not in frontend (404), skip pdf-reporting (no emoji), in infra
     mockGetMembership
-      .mockRejectedValueOnce({ status: 404 })
-      .mockResolvedValueOnce({ data: { state: "active" } });
+      .mockRejectedValueOnce({ status: 404 }) // backend
+      .mockRejectedValueOnce({ status: 404 }) // frontend
+      .mockResolvedValueOnce({ data: { state: "active" } }); // infra
 
-    const result = await getApprovalEmojiForReviewer("bob");
+    const result = await getApprovalEmojiForReviewer("marcus");
 
-    expect(result).toBe("fe");
-    expect(mockGetMembership).toHaveBeenCalledTimes(2);
+    expect(result).toBe("inf");
+    // Should have called for backend, frontend, infra — NOT pdf-reporting (skipped)
+    expect(mockGetMembership).toHaveBeenCalledTimes(3);
+    expect(mockGetMembership).not.toHaveBeenCalledWith(
+      expect.objectContaining({ team_slug: "pdf-reporting" }),
+    );
   });
 
   it("skips teams that have no approval_emoji set", async () => {
-    mockGetTeamMappingFromS3.mockResolvedValue(mappingWithEmojis as any);
-    // pdf-reporting has no emoji — should skip without making API call
-    mockGetRequestedTeams.mockResolvedValue(["pdf-reporting", "backend"]);
+    mockGetTeamMappingFromS3.mockResolvedValue({
+      teams: [
+        {
+          github_team_slug: "pdf-reporting",
+          slack_user_group_id: "S3",
+          // no approval_emoji
+        },
+        {
+          github_team_slug: "backend",
+          slack_user_group_id: "S1",
+          approval_emoji: "be",
+        },
+      ],
+    } as any);
     mockGetMembership.mockResolvedValue({ data: { state: "active" } });
 
     const result = await getApprovalEmojiForReviewer("alice");
 
     expect(result).toBe("be");
-    // Only backend membership should be checked, not pdf-reporting
+    // Only backend should have been checked
     expect(mockGetMembership).toHaveBeenCalledTimes(1);
     expect(mockGetMembership).toHaveBeenCalledWith(
       expect.objectContaining({ team_slug: "backend" }),
     );
   });
 
+  it("finds the reviewer's team even if that team is no longer in requested_teams", async () => {
+    // This is the key v2.1 scenario: the reviewer's team is satisfied and
+    // removed from requested_teams at the moment of approval, but we still
+    // need to find the right emoji based on their actual membership.
+    mockGetTeamMappingFromS3.mockResolvedValue(mappingWithEmojis as any);
+    mockGetMembership
+      .mockRejectedValueOnce({ status: 404 }) // backend (not in)
+      .mockRejectedValueOnce({ status: 404 }) // frontend (not in)
+      .mockResolvedValueOnce({ data: { state: "active" } }); // infra (in)
+
+    const result = await getApprovalEmojiForReviewer("marcus");
+
+    expect(result).toBe("inf");
+  });
+
   it("falls back to :white_check_mark: when reviewer is not in any mapped team", async () => {
     mockGetTeamMappingFromS3.mockResolvedValue(mappingWithEmojis as any);
-    mockGetRequestedTeams.mockResolvedValue(["backend", "frontend"]);
     mockGetMembership.mockRejectedValue({ status: 404 });
 
     const result = await getApprovalEmojiForReviewer("outsider");
@@ -124,9 +155,13 @@ describe("getApprovalEmojiForReviewer", () => {
     );
   });
 
-  it("falls back to :white_check_mark: when no teams are requested", async () => {
-    mockGetTeamMappingFromS3.mockResolvedValue(mappingWithEmojis as any);
-    mockGetRequestedTeams.mockResolvedValue([]);
+  it("falls back to :white_check_mark: when mapping has no teams with emojis", async () => {
+    mockGetTeamMappingFromS3.mockResolvedValue({
+      teams: [
+        { github_team_slug: "pdf-reporting", slack_user_group_id: "S3" },
+        { github_team_slug: "sre", slack_user_group_id: "S4" },
+      ],
+    } as any);
 
     const result = await getApprovalEmojiForReviewer("alice");
 
@@ -136,7 +171,6 @@ describe("getApprovalEmojiForReviewer", () => {
 
   it("falls back gracefully when getTeamMappingFromS3 throws", async () => {
     mockGetTeamMappingFromS3.mockRejectedValue(new Error("S3 down"));
-    mockGetRequestedTeams.mockResolvedValue(["backend"]);
 
     const result = await getApprovalEmojiForReviewer("alice");
 
@@ -155,15 +189,13 @@ describe("getApprovalEmojiForReviewer", () => {
 
     expect(result).toBe("white_check_mark");
     expect(mockGetTeamMappingFromS3).not.toHaveBeenCalled();
-    expect(mockGetRequestedTeams).not.toHaveBeenCalled();
   });
 
   it("logs a warning for non-404 membership errors but keeps looking", async () => {
     mockGetTeamMappingFromS3.mockResolvedValue(mappingWithEmojis as any);
-    mockGetRequestedTeams.mockResolvedValue(["backend", "frontend"]);
     mockGetMembership
-      .mockRejectedValueOnce({ status: 500, message: "Internal Error" })
-      .mockResolvedValueOnce({ data: { state: "active" } });
+      .mockRejectedValueOnce({ status: 500, message: "Internal Error" }) // backend
+      .mockResolvedValueOnce({ data: { state: "active" } }); // frontend
 
     const result = await getApprovalEmojiForReviewer("alice");
 
@@ -171,5 +203,18 @@ describe("getApprovalEmojiForReviewer", () => {
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Unexpected error checking membership"),
     );
+  });
+
+  it("ignores reviewer with inactive membership state", async () => {
+    mockGetTeamMappingFromS3.mockResolvedValue(mappingWithEmojis as any);
+    // Imagine state="pending" (invited but not accepted)
+    mockGetMembership.mockResolvedValue({
+      data: { state: "pending" },
+    });
+
+    const result = await getApprovalEmojiForReviewer("alice");
+
+    // pending state shouldn't count — should fall through to fallback
+    expect(result).toBe("white_check_mark");
   });
 });
