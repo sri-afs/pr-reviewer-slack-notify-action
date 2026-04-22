@@ -2,16 +2,13 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 
 import { fail } from "../utils/fail";
-import { getApprovalEmojiForReviewer } from "../utils/getApprovalEmojiForReviewer";
 import { getSlackMessageId } from "../utils/getSlackMessageId";
 import { logger } from "../utils/logger";
 import { slackWebClient } from "../utils/slackWebClient";
 
-// Static reactions for non-approval review states. Approved is determined
-// dynamically via getApprovalEmojiForReviewer so we can emit group-specific
-// emojis (e.g. :be: when backend approves).
-const staticReactionMap: Record<string, string> = {
+const reactionMap: Record<string, string> = {
   commented: "speech_balloon",
+  approved: "white_check_mark",
   changes_requested: "octagonal_sign",
 };
 
@@ -45,16 +42,9 @@ export const handlePullRequestReview = async (): Promise<void> => {
     }
 
     const reviewerLogin = review.user.login;
+    const reactionToAdd = reactionMap[review.state];
 
-    let reactionToAdd: string;
-    if (review.state === "approved") {
-      reactionToAdd = await getApprovalEmojiForReviewer(reviewerLogin);
-    } else if (
-      review.state === "commented" ||
-      review.state === "changes_requested"
-    ) {
-      reactionToAdd = staticReactionMap[review.state];
-    } else {
+    if (!reactionToAdd) {
       logger.info(`Ignoring unhandled review state: ${review.state}`);
       return;
     }

@@ -2,7 +2,6 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-import { getApprovalEmojiForReviewer } from "../utils/getApprovalEmojiForReviewer";
 import { getSlackMessageId } from "../utils/getSlackMessageId";
 import { slackWebClient } from "../utils/slackWebClient";
 
@@ -11,7 +10,6 @@ import { handlePullRequestReview } from "./handlePullRequestReview";
 vi.mock("@actions/core");
 vi.mock("@actions/github");
 vi.mock("../utils/fail");
-vi.mock("../utils/getApprovalEmojiForReviewer");
 vi.mock("../utils/getSlackMessageId");
 vi.mock("../utils/logger");
 vi.mock("../utils/slackWebClient", () => ({
@@ -23,7 +21,6 @@ vi.mock("../utils/slackWebClient", () => ({
 
 const mockCore = vi.mocked(core);
 const mockGithub = vi.mocked(github);
-const mockGetApprovalEmojiForReviewer = vi.mocked(getApprovalEmojiForReviewer);
 const mockGetSlackMessageId = vi.mocked(getSlackMessageId);
 const mockPostMessage = vi.mocked(slackWebClient.chat.postMessage);
 const mockReactionsGet = vi.mocked(slackWebClient.reactions.get);
@@ -60,7 +57,6 @@ describe("handlePullRequestReview", () => {
     mockPostMessage.mockResolvedValue({ ok: true } as any);
     mockReactionsGet.mockResolvedValue({ message: { reactions: [] } } as any);
     mockReactionsAdd.mockResolvedValue({ ok: true } as any);
-    mockGetApprovalEmojiForReviewer.mockResolvedValue("white_check_mark");
   });
 
   describe("approved review", () => {
@@ -68,30 +64,17 @@ describe("handlePullRequestReview", () => {
       mockGithub.context.payload.review.state = "approved";
     });
 
-    it("posts thread reply and adds the team-specific approval emoji", async () => {
+    it("posts thread reply and adds :white_check_mark: reaction", async () => {
       mockGithub.context.payload.review.body = "";
-      mockGetApprovalEmojiForReviewer.mockResolvedValue("be");
 
       await handlePullRequestReview();
 
-      expect(mockGetApprovalEmojiForReviewer).toHaveBeenCalledWith("reviewer1");
       expect(mockPostMessage).toHaveBeenCalledTimes(1);
       const callArgs = mockPostMessage.mock.calls[0][0] as any;
       expect(callArgs.text).toContain("*reviewer1*");
       expect(callArgs.text).toContain("approved your PR");
       expect(callArgs.channel).toBe("test-channel");
       expect(callArgs.thread_ts).toBe("1234567890.123456");
-      expect(mockReactionsAdd).toHaveBeenCalledWith(
-        expect.objectContaining({ name: "be" }),
-      );
-    });
-
-    it("falls back to :white_check_mark: when no team emoji resolves", async () => {
-      mockGithub.context.payload.review.body = "";
-      mockGetApprovalEmojiForReviewer.mockResolvedValue("white_check_mark");
-
-      await handlePullRequestReview();
-
       expect(mockReactionsAdd).toHaveBeenCalledWith(
         expect.objectContaining({ name: "white_check_mark" }),
       );
@@ -206,9 +189,7 @@ describe("handlePullRequestReview", () => {
 
       await handlePullRequestReview();
 
-      // thread reply is still posted
       expect(mockPostMessage).toHaveBeenCalledTimes(1);
-      // but reaction is not duplicated
       expect(mockReactionsAdd).not.toHaveBeenCalled();
     });
   });
