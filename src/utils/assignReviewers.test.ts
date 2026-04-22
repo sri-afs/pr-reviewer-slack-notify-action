@@ -3,7 +3,6 @@ import * as github from "@actions/github";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { assignCodeownersAsReviewers } from "./assignReviewers";
-import { getTeamMembers } from "./expandTeamMembers";
 import { logger } from "./logger";
 import { parseCodeowners } from "./parseCodeowners";
 
@@ -11,7 +10,6 @@ vi.mock("@actions/core");
 vi.mock("@actions/github");
 vi.mock("./logger");
 vi.mock("./parseCodeowners");
-vi.mock("./expandTeamMembers");
 
 const mockRequestReviewers = vi.fn();
 const mockListRequestedReviewers = vi.fn();
@@ -34,7 +32,6 @@ const mockOctokit = {
 const mockCore = vi.mocked(core);
 const mockGithub = vi.mocked(github);
 const mockParseCodeowners = vi.mocked(parseCodeowners);
-const mockGetTeamMembers = vi.mocked(getTeamMembers);
 
 const pull_request = {
   number: 42,
@@ -56,93 +53,55 @@ describe("assignCodeownersAsReviewers", () => {
     mockCreateComment.mockResolvedValue({});
   });
 
-  it("successfully assigns users from CODEOWNERS", async () => {
+  it("successfully assigns teams from CODEOWNERS", async () => {
     mockParseCodeowners.mockResolvedValue({
-      users: ["alice", "bob"],
-      teams: [],
+      users: [],
+      teams: ["test-org/frontend", "test-org/backend"],
       success: true,
     });
 
     mockRequestReviewers.mockResolvedValue({
       data: {
-        requested_reviewers: [{ login: "alice" }, { login: "bob" }],
-        requested_teams: [],
+        requested_reviewers: [],
+        requested_teams: [{ slug: "frontend" }, { slug: "backend" }],
       },
     });
 
     const result = await assignCodeownersAsReviewers(pull_request, repository);
 
     expect(result.success).toBe(true);
-    expect(result.assigned.users).toEqual(["alice", "bob"]);
+    expect(result.assigned.teams).toEqual(["frontend", "backend"]);
     expect(result.errors).toEqual([]);
     expect(mockRequestReviewers).toHaveBeenCalledWith(
       expect.objectContaining({
         owner: "test-org",
         repo: "test-repo",
         pull_number: 42,
-        reviewers: ["alice", "bob"],
+        team_reviewers: ["test-org/frontend", "test-org/backend"],
       }),
     );
   });
 
-  it("expands teams to individual members when expandTeams is true", async () => {
+  it("does not send a reviewers field (teams-only)", async () => {
     mockParseCodeowners.mockResolvedValue({
       users: [],
       teams: ["test-org/frontend"],
       success: true,
     });
 
-    mockGetTeamMembers.mockResolvedValue({
-      users: ["alice", "bob"],
-      errors: [],
-    });
-
     mockRequestReviewers.mockResolvedValue({
       data: {
-        requested_reviewers: [{ login: "alice" }, { login: "bob" }],
-        requested_teams: [],
+        requested_reviewers: [],
+        requested_teams: [{ slug: "frontend" }],
       },
     });
 
-    const result = await assignCodeownersAsReviewers(
-      pull_request,
-      repository,
-      true,
-    );
+    await assignCodeownersAsReviewers(pull_request, repository);
 
-    expect(result.success).toBe(true);
-    expect(result.assigned.users).toEqual(["alice", "bob"]);
-    expect(mockGetTeamMembers).toHaveBeenCalledWith(
-      ["test-org/frontend"],
-      "test-org",
-    );
-  });
-
-  it("filters out PR author from reviewers", async () => {
-    mockParseCodeowners.mockResolvedValue({
-      users: ["alice", "author", "bob"],
-      teams: [],
-      success: true,
-    });
-
-    mockRequestReviewers.mockResolvedValue({
-      data: {
-        requested_reviewers: [{ login: "alice" }, { login: "bob" }],
-        requested_teams: [],
-      },
-    });
-
-    const result = await assignCodeownersAsReviewers(pull_request, repository);
-
-    expect(result.success).toBe(true);
-    expect(mockRequestReviewers).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reviewers: ["alice", "bob"],
-      }),
-    );
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining("Filtered out PR author"),
-    );
+    // Ensure we never pass a `reviewers` field (we don't assign individuals in v1)
+    const callArg = mockRequestReviewers.mock.calls[0][0];
+    expect(callArg).not.toHaveProperty("reviewers");
+    expect(callArg).toHaveProperty("team_reviewers");
   });
 
   it("returns success: false when parseCodeowners fails", async () => {
@@ -161,9 +120,9 @@ describe("assignCodeownersAsReviewers", () => {
     expect(mockRequestReviewers).not.toHaveBeenCalled();
   });
 
-  it("returns success: false when only reviewer is the PR author", async () => {
+  it("returns success: false when CODEOWNERS yields no teams", async () => {
     mockParseCodeowners.mockResolvedValue({
-      users: ["author"],
+      users: [],
       teams: [],
       success: true,
     });
@@ -172,15 +131,15 @@ describe("assignCodeownersAsReviewers", () => {
 
     expect(result.success).toBe(false);
     expect(result.errors).toContain(
-      "No valid reviewers available after filtering out PR author",
+      "No valid team reviewers available in CODEOWNERS",
     );
     expect(mockRequestReviewers).not.toHaveBeenCalled();
   });
 
   it("handles 422 error from requestReviewers", async () => {
     mockParseCodeowners.mockResolvedValue({
-      users: ["alice"],
-      teams: [],
+      users: [],
+      teams: ["test-org/frontend"],
       success: true,
     });
 
@@ -203,8 +162,8 @@ describe("assignCodeownersAsReviewers", () => {
 
   it("handles 403 error from requestReviewers", async () => {
     mockParseCodeowners.mockResolvedValue({
-      users: ["alice"],
-      teams: [],
+      users: [],
+      teams: ["test-org/frontend"],
       success: true,
     });
 
@@ -227,15 +186,15 @@ describe("assignCodeownersAsReviewers", () => {
 
   it("skips duplicate PR comment if one already exists", async () => {
     mockParseCodeowners.mockResolvedValue({
-      users: ["alice"],
-      teams: [],
+      users: [],
+      teams: ["test-org/frontend"],
       success: true,
     });
 
     mockRequestReviewers.mockResolvedValue({
       data: {
-        requested_reviewers: [{ login: "alice" }],
-        requested_teams: [],
+        requested_reviewers: [],
+        requested_teams: [{ slug: "frontend" }],
       },
     });
 
@@ -253,41 +212,6 @@ describe("assignCodeownersAsReviewers", () => {
     expect(mockCreateComment).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
       "Auto-assignment comment already exists, skipping duplicate",
-    );
-  });
-
-  it("returns errors when team expansion fails", async () => {
-    mockParseCodeowners.mockResolvedValue({
-      users: ["alice"],
-      teams: ["test-org/missing-team"],
-      success: true,
-    });
-
-    mockGetTeamMembers.mockResolvedValue({
-      users: [],
-      errors: [
-        "Could not get members for team test-org/missing-team: Not Found",
-      ],
-    });
-
-    mockRequestReviewers.mockResolvedValue({
-      data: {
-        requested_reviewers: [{ login: "alice" }],
-        requested_teams: [],
-      },
-    });
-
-    const result = await assignCodeownersAsReviewers(
-      pull_request,
-      repository,
-      true,
-    );
-
-    // Has assigned users but also has errors, so success is false
-    expect(result.success).toBe(false);
-    expect(result.assigned.users).toEqual(["alice"]);
-    expect(result.errors).toContain(
-      "Could not get members for team test-org/missing-team: Not Found",
     );
   });
 });

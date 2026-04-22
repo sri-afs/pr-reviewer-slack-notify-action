@@ -1,18 +1,16 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
 
-import { getTeamMembers } from "./expandTeamMembers";
 import { logger } from "./logger";
 import { parseCodeowners } from "./parseCodeowners";
 
 /**
- * Assigns reviewers to a pull request based on CODEOWNERS
- * Adapted from existing GitHub Actions script
+ * Assigns reviewers to a pull request based on CODEOWNERS.
+ * v1: teams are assigned as teams (no expansion to individuals).
  */
 export const assignCodeownersAsReviewers = async (
   pull_request: any,
   repository: any,
-  expandTeams: boolean = true,
 ): Promise<{
   success: boolean;
   assigned: { users: string[]; teams: string[] };
@@ -23,7 +21,6 @@ export const assignCodeownersAsReviewers = async (
   try {
     logger.info(`Assigning reviewers to PR #${pull_request.number}...`);
     logger.info(`PR Author: ${pull_request.user.login}`);
-    logger.info(`Expand teams to members: ${expandTeams}`);
 
     // Parse CODEOWNERS
     const codeownersResult = await parseCodeowners(
@@ -40,75 +37,30 @@ export const assignCodeownersAsReviewers = async (
       };
     }
 
-    let allUsers = [...codeownersResult.users];
-    let finalTeams = [...codeownersResult.teams];
+    const finalTeams = [...codeownersResult.teams];
     const errors: string[] = [];
 
-    logger.info(`Candidate users: ${allUsers.join(", ") || "none"}`);
     logger.info(`Candidate teams: ${finalTeams.join(", ") || "none"}`);
 
-    // If expandTeams is true, get individual members from teams
-    if (expandTeams && finalTeams.length > 0) {
-      logger.info("Expanding teams to individual members...");
-      const teamMemberResult = await getTeamMembers(
-        finalTeams,
-        repository.owner.login,
-      );
-
-      // Add team members to the user list
-      allUsers.push(...teamMemberResult.users);
-      errors.push(...teamMemberResult.errors);
-
-      // Don't assign teams directly if we're expanding them
-      finalTeams = [];
-
-      logger.info(
-        `Expanded team(s) to ${teamMemberResult.users.length} individual member(s)`,
-      );
-    }
-
-    // Remove duplicates from users
-    allUsers = [...new Set(allUsers)];
-
-    // Filter out the PR author from users
-    const filteredUsers = allUsers.filter(
-      (user) => user !== pull_request.user.login,
-    );
-
-    if (filteredUsers.length !== allUsers.length) {
-      logger.info(
-        `Filtered out PR author (${pull_request.user.login}) from reviewers list`,
-      );
-    }
-
     // Validate that we have reviewers to assign
-    if (filteredUsers.length === 0 && finalTeams.length === 0) {
-      logger.warn(
-        "No valid reviewers to assign (PR author was the only user in CODEOWNERS)",
-      );
+    if (finalTeams.length === 0) {
+      logger.warn("No valid team reviewers to assign from CODEOWNERS");
       return {
         success: false,
         assigned: { users: [], teams: [] },
-        errors: ["No valid reviewers available after filtering out PR author"],
+        errors: ["No valid team reviewers available in CODEOWNERS"],
       };
     }
 
     let assignedUsers: string[] = [];
     let assignedTeams: string[] = [];
 
-    // Prepare reviewer assignment request
-    const reviewerRequest: any = {};
-
-    if (filteredUsers.length > 0) {
-      reviewerRequest.reviewers = filteredUsers;
-    }
-
-    if (finalTeams.length > 0) {
-      reviewerRequest.team_reviewers = finalTeams;
-    }
+    // Prepare reviewer assignment request — teams only, no individuals
+    const reviewerRequest: any = {
+      team_reviewers: finalTeams,
+    };
 
     logger.info("Attempting to assign:");
-    logger.info(`  - Users: ${filteredUsers.join(", ") || "none"}`);
     logger.info(`  - Teams: ${finalTeams.join(", ") || "none"}`);
 
     // Assign reviewers

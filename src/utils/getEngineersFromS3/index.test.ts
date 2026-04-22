@@ -23,13 +23,13 @@ vi.mock("@aws-sdk/client-s3", () => {
   };
 });
 
-import { getEngineersFromS3 } from "./index";
+import { getTeamMappingFromS3 } from "./index";
 
 const mockCore = vi.mocked(core);
 const mockFail = vi.mocked(fail);
 const mockLogger = vi.mocked(logger);
 
-describe("getEngineersFromS3", () => {
+describe("getTeamMappingFromS3", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCore.getInput.mockImplementation((name: string) => {
@@ -42,43 +42,76 @@ describe("getEngineersFromS3", () => {
     });
   });
 
-  it("successfully fetches and parses engineer data from S3", async () => {
-    const engineerData = {
-      engineers: [
-        { github_username: "user1", slack_id: "U123" },
-        { github_username: "user2", slack_id: "U456" },
+  it("successfully fetches and parses team mapping data from S3", async () => {
+    const teamMappingData = {
+      teams: [
+        { github_team_slug: "backend", slack_user_group_id: "S07F6TF8N86" },
+        { github_team_slug: "frontend", slack_user_group_id: "S07FG1G7ELC" },
       ],
     };
 
     const body = new EventEmitter();
     mockSend.mockResolvedValue({ Body: body });
 
-    const promise = getEngineersFromS3();
+    const promise = getTeamMappingFromS3();
 
     await vi.waitFor(() => expect(mockSend).toHaveBeenCalled());
 
-    body.emit("data", JSON.stringify(engineerData));
+    body.emit("data", JSON.stringify(teamMappingData));
     body.emit("end");
 
     const result = await promise;
 
-    expect(result).toEqual(engineerData);
-    expect(mockLogger.info).toHaveBeenCalledWith("START getEngineersFromS3");
+    expect(result).toEqual(teamMappingData);
+    expect(mockLogger.info).toHaveBeenCalledWith("START getTeamMappingFromS3");
   });
 
-  it("throws when required AWS inputs are missing", async () => {
+  it("throws when required AWS inputs are missing and no inline mapping provided", async () => {
     mockCore.getInput.mockReturnValue("");
 
-    await expect(getEngineersFromS3()).rejects.toThrow(
-      "Missing required inputs for AWS",
+    await expect(getTeamMappingFromS3()).rejects.toThrow(
+      "Missing required inputs",
     );
+  });
+
+  it("uses inline team-mapping-json when provided and skips S3", async () => {
+    const teamMappingData = {
+      teams: [
+        { github_team_slug: "backend", slack_user_group_id: "S07F6TF8N86" },
+      ],
+    };
+    mockCore.getInput.mockImplementation((name: string) => {
+      if (name === "team-mapping-json") return JSON.stringify(teamMappingData);
+      return "";
+    });
+
+    const result = await getTeamMappingFromS3();
+
+    expect(result).toEqual(teamMappingData);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      "Using inline team-mapping-json input (skipping S3 fetch)",
+    );
+  });
+
+  it("throws a clear error when inline team-mapping-json is invalid JSON", async () => {
+    mockCore.getInput.mockImplementation((name: string) => {
+      if (name === "team-mapping-json") return "{not valid json";
+      return "";
+    });
+
+    await expect(getTeamMappingFromS3()).rejects.toThrow(
+      "Invalid JSON in team-mapping-json input",
+    );
+    expect(mockFail).toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it("calls fail and rejects when S3 client.send throws", async () => {
     const error = new Error("S3 access denied");
     mockSend.mockRejectedValue(error);
 
-    await expect(getEngineersFromS3()).rejects.toThrow("S3 access denied");
+    await expect(getTeamMappingFromS3()).rejects.toThrow("S3 access denied");
     expect(mockFail).toHaveBeenCalledWith(error);
   });
 
@@ -86,7 +119,7 @@ describe("getEngineersFromS3", () => {
     const body = new EventEmitter();
     mockSend.mockResolvedValue({ Body: body });
 
-    const promise = getEngineersFromS3();
+    const promise = getTeamMappingFromS3();
 
     await vi.waitFor(() => expect(mockSend).toHaveBeenCalled());
 

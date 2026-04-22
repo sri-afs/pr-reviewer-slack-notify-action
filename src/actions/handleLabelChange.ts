@@ -2,20 +2,16 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 
 import { fail } from "../utils/fail";
-import { getEngineersFromS3 } from "../utils/getEngineersFromS3";
 import { getSlackMessageId } from "../utils/getSlackMessageId";
 import { logger } from "../utils/logger";
-import { slackWebClient } from "../utils/slackWebClient";
 
 import { createInitialMessage } from "./createInitialMessage";
 
 export const handleLabelChange = async (): Promise<void> => {
   try {
-    const channelId = core.getInput("channel-id");
     const labelForInitialNotification = core.getInput(
       "label-for-initial-notification",
     );
-    const labelNameToWatchFor = core.getInput("label-name-to-watch-for");
     const { pull_request, sender, label } = github.context.payload;
 
     if (!pull_request) {
@@ -50,69 +46,6 @@ export const handleLabelChange = async (): Promise<void> => {
       );
       await createInitialMessage();
       return;
-    }
-
-    // Handle the label-name-to-watch-for functionality (existing logic)
-    if (labelNameToWatchFor) {
-      let hasLabel = false;
-      pull_request.labels.forEach((l: any) => {
-        if (l.name === labelNameToWatchFor) {
-          hasLabel = true;
-        }
-      });
-
-      if (!hasLabel) {
-        logger.info(
-          `Label '${labelNameToWatchFor}' not present on PR, skipping`,
-        );
-        return;
-      }
-
-      const slackUsers = await getEngineersFromS3();
-      const [labeler] = slackUsers.engineers.filter((user) => {
-        return user.github_username === sender.login;
-      });
-      const [author] = slackUsers.engineers.filter((user) => {
-        return user.github_username === pull_request.user.login;
-      });
-
-      const plainText = `<@${author.slack_id}>, ${labeler.github_username} added the label ${labelNameToWatchFor} to your PR`;
-      const richText = `<@${author.slack_id}>, *${labeler.github_username}* added the label *${labelNameToWatchFor}* to your PR`;
-      const slackMessageId = await getSlackMessageId();
-
-      if (!slackMessageId) {
-        logger.info(
-          `No Slack thread found for label '${labelNameToWatchFor}' notification, skipping`,
-        );
-        core.warning(
-          `Unable to notify about label '${labelNameToWatchFor}' because no Slack message ID could be found.`,
-        );
-        return;
-      }
-
-      logger.info(
-        `Posting label '${labelNameToWatchFor}' notification to Slack thread`,
-      );
-      await slackWebClient.chat.postMessage({
-        channel: channelId,
-        thread_ts: slackMessageId,
-        text: plainText,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: richText,
-            },
-          },
-        ],
-      });
-
-      await slackWebClient.reactions.add({
-        channel: channelId,
-        timestamp: slackMessageId,
-        name: "heart_eyes",
-      });
     }
 
     return;

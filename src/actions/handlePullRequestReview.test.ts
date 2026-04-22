@@ -2,8 +2,6 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-import { fail } from "../utils/fail";
-import { getEngineersFromS3 } from "../utils/getEngineersFromS3";
 import { getSlackMessageId } from "../utils/getSlackMessageId";
 import { slackWebClient } from "../utils/slackWebClient";
 
@@ -12,7 +10,6 @@ import { handlePullRequestReview } from "./handlePullRequestReview";
 vi.mock("@actions/core");
 vi.mock("@actions/github");
 vi.mock("../utils/fail");
-vi.mock("../utils/getEngineersFromS3");
 vi.mock("../utils/getSlackMessageId");
 vi.mock("../utils/logger");
 vi.mock("../utils/slackWebClient", () => ({
@@ -24,21 +21,10 @@ vi.mock("../utils/slackWebClient", () => ({
 
 const mockCore = vi.mocked(core);
 const mockGithub = vi.mocked(github);
-const mockFail = vi.mocked(fail);
-const mockGetEngineersFromS3 = vi.mocked(getEngineersFromS3);
 const mockGetSlackMessageId = vi.mocked(getSlackMessageId);
 const mockPostMessage = vi.mocked(slackWebClient.chat.postMessage);
 const mockReactionsGet = vi.mocked(slackWebClient.reactions.get);
 const mockReactionsAdd = vi.mocked(slackWebClient.reactions.add);
-
-const mockListCommentsForReview = vi.fn();
-
-const slackUsers = {
-  engineers: [
-    { github_username: "reviewer1", slack_id: "UREV1" },
-    { github_username: "author1", slack_id: "UAUTH1" },
-  ],
-};
 
 const basePayload = {
   action: "submitted",
@@ -65,164 +51,146 @@ describe("handlePullRequestReview", () => {
       writable: true,
     });
     mockGithub.getOctokit.mockReturnValue({
-      rest: { pulls: { listCommentsForReview: mockListCommentsForReview } },
+      rest: { pulls: {} },
     } as any);
-    mockGetEngineersFromS3.mockResolvedValue(slackUsers as any);
     mockGetSlackMessageId.mockResolvedValue("1234567890.123456");
     mockPostMessage.mockResolvedValue({ ok: true } as any);
     mockReactionsGet.mockResolvedValue({ message: { reactions: [] } } as any);
     mockReactionsAdd.mockResolvedValue({ ok: true } as any);
   });
 
-  it("posts approval message and adds white_check_mark reaction", async () => {
-    mockGithub.context.payload.review.state = "approved";
-    mockGithub.context.payload.review.body = "";
-
-    await handlePullRequestReview();
-
-    const callArgs = mockPostMessage.mock.calls[0][0] as any;
-    expect(callArgs.text).toContain("approved your PR");
-    expect(callArgs.channel).toBe("test-channel");
-    expect(callArgs.thread_ts).toBe("1234567890.123456");
-    expect(mockReactionsAdd).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "white_check_mark" }),
-    );
-  });
-
-  it("posts changes_requested message with review body and octagonal_sign reaction", async () => {
-    mockGithub.context.payload.review.state = "changes_requested";
-    mockGithub.context.payload.review.body = "Please fix the tests";
-
-    await handlePullRequestReview();
-
-    const callArgs = mockPostMessage.mock.calls[0][0] as any;
-    expect(callArgs.text).toContain("would like you to change some things");
-    expect(callArgs.text).toContain("Please fix the tests");
-    expect(mockReactionsAdd).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "octagonal_sign" }),
-    );
-  });
-
-  it("posts commented message with fetched inline comments and speech_balloon reaction", async () => {
-    mockGithub.context.payload.review.state = "commented";
-    mockGithub.context.payload.review.body = "Overall looks good";
-    mockListCommentsForReview.mockResolvedValue({
-      data: [
-        {
-          body: "Nit: rename this var",
-          html_url: "https://github.com/comment/1",
-        },
-      ],
+  describe("approved review", () => {
+    beforeEach(() => {
+      mockGithub.context.payload.review.state = "approved";
     });
 
-    await handlePullRequestReview();
+    it("posts thread reply and adds :white_check_mark: reaction", async () => {
+      mockGithub.context.payload.review.body = "";
 
-    const callArgs = mockPostMessage.mock.calls[0][0] as any;
-    expect(callArgs.text).toContain("Overall looks good");
-    expect(callArgs.text).toContain("Nit: rename this var");
-    expect(mockReactionsAdd).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "speech_balloon" }),
-    );
-  });
+      await handlePullRequestReview();
 
-  it('uses singular "a comment" for single comment', async () => {
-    mockGithub.context.payload.review.state = "commented";
-    mockGithub.context.payload.review.body = "";
-    mockListCommentsForReview.mockResolvedValue({
-      data: [{ body: "Fix this", html_url: "https://github.com/comment/1" }],
+      expect(mockPostMessage).toHaveBeenCalledTimes(1);
+      const callArgs = mockPostMessage.mock.calls[0][0] as any;
+      expect(callArgs.text).toContain("*reviewer1*");
+      expect(callArgs.text).toContain("approved your PR");
+      expect(callArgs.channel).toBe("test-channel");
+      expect(callArgs.thread_ts).toBe("1234567890.123456");
+      expect(mockReactionsAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "white_check_mark" }),
+      );
     });
 
-    await handlePullRequestReview();
+    it("includes review body in thread reply when present", async () => {
+      mockGithub.context.payload.review.body = "LGTM!";
 
-    const callArgs = mockPostMessage.mock.calls[0][0] as any;
-    expect(callArgs.text).toContain("added a comment:");
-  });
+      await handlePullRequestReview();
 
-  it('uses plural "N comments" for multiple comments', async () => {
-    mockGithub.context.payload.review.state = "commented";
-    mockGithub.context.payload.review.body = "Top-level comment";
-    mockListCommentsForReview.mockResolvedValue({
-      data: [
-        { body: "Inline 1", html_url: "https://github.com/comment/1" },
-        { body: "Inline 2", html_url: "https://github.com/comment/2" },
-      ],
+      const callArgs = mockPostMessage.mock.calls[0][0] as any;
+      expect(callArgs.text).toContain("LGTM!");
     });
 
-    await handlePullRequestReview();
+    it("does not include Slack user mentions in the thread reply", async () => {
+      await handlePullRequestReview();
 
-    const callArgs = mockPostMessage.mock.calls[0][0] as any;
-    expect(callArgs.text).toContain("added 3 comments:");
+      const callArgs = mockPostMessage.mock.calls[0][0] as any;
+      expect(callArgs.text).not.toMatch(/<@U[A-Z0-9]+>/);
+    });
   });
 
-  it("includes links to each comment", async () => {
-    mockGithub.context.payload.review.state = "commented";
-    mockGithub.context.payload.review.body = "";
-    mockListCommentsForReview.mockResolvedValue({
-      data: [
-        { body: "Comment A", html_url: "https://github.com/comment/a" },
-        { body: "Comment B", html_url: "https://github.com/comment/b" },
-      ],
+  describe("changes_requested review", () => {
+    beforeEach(() => {
+      mockGithub.context.payload.review.state = "changes_requested";
     });
 
-    await handlePullRequestReview();
+    it("posts thread reply and adds :octagonal_sign: reaction", async () => {
+      mockGithub.context.payload.review.body = "Please fix the tests";
 
-    const callArgs = mockPostMessage.mock.calls[0][0] as any;
-    expect(callArgs.text).toContain("https://github.com/comment/a");
-    expect(callArgs.text).toContain("https://github.com/comment/b");
-    expect(callArgs.text).toContain(":link:");
+      await handlePullRequestReview();
+
+      expect(mockPostMessage).toHaveBeenCalledTimes(1);
+      const callArgs = mockPostMessage.mock.calls[0][0] as any;
+      expect(callArgs.text).toContain("*reviewer1*");
+      expect(callArgs.text).toContain("would like you to change some things");
+      expect(callArgs.text).toContain("Please fix the tests");
+      expect(mockReactionsAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "octagonal_sign" }),
+      );
+    });
   });
 
-  it("skips non-submitted actions", async () => {
-    mockGithub.context.payload.action = "dismissed";
+  describe("commented review (v1.1: no thread reply)", () => {
+    beforeEach(() => {
+      mockGithub.context.payload.review.state = "commented";
+    });
 
-    await handlePullRequestReview();
+    it("adds :speech_balloon: reaction but does NOT post a thread reply", async () => {
+      mockGithub.context.payload.review.body = "This is a review comment";
 
-    expect(mockPostMessage).not.toHaveBeenCalled();
-    expect(mockReactionsAdd).not.toHaveBeenCalled();
+      await handlePullRequestReview();
+
+      expect(mockPostMessage).not.toHaveBeenCalled();
+      expect(mockReactionsAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "speech_balloon" }),
+      );
+    });
+
+    it("still skips when reaction is already present", async () => {
+      mockReactionsGet.mockResolvedValue({
+        message: { reactions: [{ name: "speech_balloon" }] },
+      } as any);
+
+      await handlePullRequestReview();
+
+      expect(mockPostMessage).not.toHaveBeenCalled();
+      expect(mockReactionsAdd).not.toHaveBeenCalled();
+    });
   });
 
-  it("skips when no slack message ID", async () => {
-    mockGetSlackMessageId.mockResolvedValue(undefined as any);
+  describe("event-level skips", () => {
+    it("skips non-submitted actions", async () => {
+      mockGithub.context.payload.action = "dismissed";
 
-    await handlePullRequestReview();
+      await handlePullRequestReview();
 
-    expect(mockPostMessage).not.toHaveBeenCalled();
-    expect(mockCore.warning).toHaveBeenCalledWith(
-      expect.stringContaining("no Slack message ID"),
-    );
+      expect(mockPostMessage).not.toHaveBeenCalled();
+      expect(mockReactionsAdd).not.toHaveBeenCalled();
+    });
+
+    it("skips when no slack message ID", async () => {
+      mockGetSlackMessageId.mockResolvedValue(undefined as any);
+
+      await handlePullRequestReview();
+
+      expect(mockPostMessage).not.toHaveBeenCalled();
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining("no Slack message ID"),
+      );
+    });
+
+    it("skips unknown review states", async () => {
+      mockGithub.context.payload.review.state = "some_unexpected_state";
+
+      await handlePullRequestReview();
+
+      expect(mockPostMessage).not.toHaveBeenCalled();
+      expect(mockReactionsAdd).not.toHaveBeenCalled();
+    });
   });
 
-  it("throws when reviewer not found in S3 mapping", async () => {
-    mockGithub.context.payload.review.user.login = "unknown-reviewer";
+  describe("reaction deduplication (approved/changes_requested)", () => {
+    beforeEach(() => {
+      mockGithub.context.payload.review.state = "approved";
+    });
 
-    await expect(handlePullRequestReview()).rejects.toThrow(
-      "Could not map unknown-reviewer to the users you provided in action.yml",
-    );
-    expect(mockFail).toHaveBeenCalled();
-  });
+    it("skips adding reaction if already present, but still posts thread reply", async () => {
+      mockReactionsGet.mockResolvedValue({
+        message: { reactions: [{ name: "white_check_mark" }] },
+      } as any);
 
-  it("throws when author not found in S3 mapping", async () => {
-    mockGetEngineersFromS3.mockResolvedValue({
-      engineers: [{ github_username: "reviewer1", slack_id: "UREV1" }],
-    } as any);
-    mockGithub.context.payload.pull_request.user.login = "unknown-author";
+      await handlePullRequestReview();
 
-    await expect(handlePullRequestReview()).rejects.toThrow(
-      "Could not map unknown-author to the users you provided in action.yml",
-    );
-    expect(mockFail).toHaveBeenCalled();
-  });
-
-  it("skips adding reaction if already present", async () => {
-    mockGithub.context.payload.review.state = "approved";
-    mockReactionsGet.mockResolvedValue({
-      message: {
-        reactions: [{ name: "white_check_mark" }],
-      },
-    } as any);
-
-    await handlePullRequestReview();
-
-    expect(mockReactionsAdd).not.toHaveBeenCalled();
+      expect(mockPostMessage).toHaveBeenCalledTimes(1);
+      expect(mockReactionsAdd).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1,4 +1,4 @@
-export interface EngineerGithubSlackMapping {
-  github_username: string;
-  slack_id: string;
+export interface TeamGithubSlackMapping {
+  github_team_slug: string;
+  slack_user_group_id: string;
 }

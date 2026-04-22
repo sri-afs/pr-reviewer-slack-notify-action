@@ -1,10 +1,10 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
 
-import { createUsersToAtString } from "../utils/createUsersToAtString";
+import { createTeamsToAtString } from "../utils/createTeamsToAtString";
 import { fail } from "../utils/fail";
 import { getPullRequest } from "../utils/getPullRequest";
-import { getRequestedReviewersAsIndividuals } from "../utils/getRequestedReviewersAsIndividuals";
+import { getRequestedTeams } from "../utils/getRequestedTeams";
 import { logger } from "../utils/logger";
 import { slackWebClient } from "../utils/slackWebClient";
 
@@ -27,10 +27,10 @@ export const createInitialMessage = async (): Promise<string | void> => {
       return;
     }
 
-    const requestedReviewers = await getRequestedReviewersAsIndividuals();
+    const requestedTeams = await getRequestedTeams();
 
-    if (!requestedReviewers.length) {
-      logger.info("No requested reviewers on PR, skipping initial message");
+    if (!requestedTeams.length) {
+      logger.info("No requested teams on PR, skipping initial message");
       return;
     }
 
@@ -39,9 +39,9 @@ export const createInitialMessage = async (): Promise<string | void> => {
       baseMessage = `${baseMessage}\n>${pull_request.body}`;
     }
 
-    const usersToAtString = await createUsersToAtString(requestedReviewers);
+    const teamsToAtString = await createTeamsToAtString(requestedTeams);
 
-    const text = `${usersToAtString} ${baseMessage}`;
+    const text = `${teamsToAtString} ${baseMessage}`;
     const prSlackMsg = await slackWebClient.chat.postMessage({
       channel: channelId,
       text,

@@ -2,12 +2,11 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 
 import { fail } from "../utils/fail";
-import { getEngineersFromS3 } from "../utils/getEngineersFromS3";
 import { getSlackMessageId } from "../utils/getSlackMessageId";
 import { logger } from "../utils/logger";
 import { slackWebClient } from "../utils/slackWebClient";
 
-const reactionMap = {
+const reactionMap: Record<string, string> = {
   commented: "speech_balloon",
   approved: "white_check_mark",
   changes_requested: "octagonal_sign",
@@ -17,7 +16,6 @@ export const handlePullRequestReview = async (): Promise<void> => {
   logger.info("Handling pull request review event");
   try {
     const channelId = core.getInput("channel-id");
-    const slackUsers = await getEngineersFromS3();
     const { action, pull_request, review } = github.context.payload;
 
     if (action !== "submitted") {
@@ -43,113 +41,55 @@ export const handlePullRequestReview = async (): Promise<void> => {
       return;
     }
 
-    //
-    // ─── MAP USERS ───────────────────────────────────────────────────
-    //
+    const reviewerLogin = review.user.login;
+    const reactionToAdd = reactionMap[review.state];
 
-    const [reviewer] = slackUsers.engineers.filter((user) => {
-      return user.github_username === review.user.login;
-    });
-    const [author] = slackUsers.engineers.filter((user) => {
-      return user.github_username === pull_request.user.login;
-    });
-
-    if (!reviewer) {
-      core.error(
-        `Could not map reviewer '${review.user.login}' to a Slack user from the S3 mapping`,
-      );
-      throw Error(
-        `Could not map ${review.user.login} to the users you provided in action.yml`,
-      );
-    }
-
-    if (!author) {
-      core.error(
-        `Could not map PR author '${pull_request.user.login}' to a Slack user from the S3 mapping`,
-      );
-      throw Error(
-        `Could not map ${pull_request.user.login} to the users you provided in action.yml`,
-      );
+    if (!reactionToAdd) {
+      logger.info(`Ignoring unhandled review state: ${review.state}`);
+      return;
     }
 
     //
-    // ─── BUILD MESSAGE ───────────────────────────────────────────────
+    // ─── POST THREAD REPLY (approved / changes_requested only) ───────
+    // v1.1: commented reviews only add a reaction on the parent — no
+    // thread reply. The :speech_balloon: signals "someone commented,
+    // check GitHub for details". Reduces thread noise for the groups
+    // tagged on the parent message.
     //
 
-    const userText = `<@${author.slack_id}>, *${reviewer.github_username}*`;
-    let actionText: string = "";
-    let reactionToAdd: string = "";
-    switch (review.state) {
-      case "changes_requested":
-        actionText = "would like you to change some things in the code";
-        reactionToAdd = reactionMap["changes_requested"];
-        if (review.body) {
-          actionText = `${actionText}\n>${review.body}`;
-        }
-        break;
-      case "commented": {
-        reactionToAdd = reactionMap["commented"];
+    if (
+      review.state === "approved" ||
+      review.state === "changes_requested"
+    ) {
+      const actionText =
+        review.state === "approved"
+          ? "approved your PR"
+          : "would like you to change some things in the code";
+      const fullText = review.body
+        ? `${actionText}\n>${review.body}`
+        : actionText;
 
-        // fetch inline review comments from the API
-        const ghToken = core.getInput("github-token");
-        const octokit = github.getOctokit(ghToken);
-        const { repository } = github.context.payload;
-        const commentsRes = await octokit.rest.pulls.listCommentsForReview({
-          owner: repository!.owner.login,
-          repo: repository!.name,
-          pull_number: pull_request.number,
-          review_id: review.id,
-        });
-
-        const allComments: { body: string; url: string }[] = [];
-        if (review.body) {
-          allComments.push({ body: review.body, url: review.html_url });
-        }
-        for (const comment of commentsRes.data) {
-          if (comment.body) {
-            allComments.push({ body: comment.body, url: comment.html_url });
-          }
-        }
-
-        const commentCount = allComments.length;
-        const commentLabel =
-          commentCount === 1 ? "a comment" : `${commentCount} comments`;
-        actionText = `added ${commentLabel}:`;
-        for (const { body, url } of allComments) {
-          actionText = `${actionText}\n><${url}|:link:> ${body}`;
-        }
-        break;
-      }
-      case "approved":
-        actionText = "approved your PR";
-        reactionToAdd = reactionMap["approved"];
-        if (review.body) {
-          actionText = `${actionText}\n>${review.body}`;
-        }
-        break;
-    }
-    const text = `${userText} ${actionText}`;
-    // post corresponding message
-    await slackWebClient.chat.postMessage({
-      channel: channelId,
-      thread_ts: slackMessageId,
-      text,
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text,
+      const text = `*${reviewerLogin}* ${fullText}`;
+      await slackWebClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: slackMessageId,
+        text,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text,
+            },
           },
-        },
-      ],
-    });
+        ],
+      });
+    }
 
     //
     // ─── ADD REACTION TO MAIN THREAD ─────────────────────────────────
     //
 
-    // get existing reactions on message
     const existingReactionsRes = await slackWebClient.reactions.get({
       channel: channelId,
       timestamp: slackMessageId,
@@ -157,7 +97,6 @@ export const handlePullRequestReview = async (): Promise<void> => {
 
     let hasReaction = false;
     if (existingReactionsRes?.message?.reactions) {
-      // return out if the reaction we would add is already present (since we cant have the bot react on behalf of a user)
       existingReactionsRes.message.reactions.forEach((reaction) => {
         if (reaction.name === reactionToAdd) {
           hasReaction = true;
@@ -177,7 +116,7 @@ export const handlePullRequestReview = async (): Promise<void> => {
     });
 
     logger.info(
-      `Review by ${review.user.login} (${review.state}) posted to Slack thread`,
+      `Review by ${review.user.login} (${review.state}) handled — reaction '${reactionToAdd}' added`,
     );
     return;
   } catch (error) {
